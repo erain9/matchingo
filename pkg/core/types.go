@@ -112,6 +112,9 @@ func (d *Done) setLeftQuantity(quantity *fpdecimal.Decimal) {
 
 // Helper function to create trade orders
 func newTradeOrder(order *Order, quantity, price fpdecimal.Decimal) *TradeOrder {
+	if order == nil {
+		return nil
+	}
 	return &TradeOrder{
 		OrderID:  order.ID(),
 		Role:     order.Role(),

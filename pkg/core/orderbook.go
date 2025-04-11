@@ -337,6 +337,12 @@ func (ob *OrderBook) processLimitOrder(limitOrder *Order) (done *Done, err error
 		ExecutedQty:  done.Processed.String(),
 		RemainingQty: done.Left.String(),
 		Trades:       convertTrades(done.tradesToSlice()),
+		Canceled:     done.Canceled,
+		Activated:    done.Activated,
+		Stored:       done.Stored,
+		Quantity:     done.Quantity.String(),
+		Processed:    done.Processed.String(),
+		Left:         done.Left.String(),
 	}
 
 	// Send the DoneMessage to Kafka. This won't block the call
@@ -469,9 +475,16 @@ func (ob *OrderBook) GetAsks() interface{} {
 func convertTrades(trades []TradeOrder) []messaging.Trade {
 	converted := make([]messaging.Trade, len(trades))
 	for i, trade := range trades {
+		role := "MAKER"
+		if trade.Role == TAKER {
+			role = "TAKER"
+		}
 		converted[i] = messaging.Trade{
+			OrderID:  trade.OrderID,
+			Role:     role,
 			Price:    trade.Price.String(),
 			Quantity: trade.Quantity.String(),
+			IsQuote:  trade.IsQuote,
 		}
 	}
 	return converted

@@ -14,10 +14,19 @@ type DoneMessage struct {
 	ExecutedQty  string
 	RemainingQty string
 	Trades       []Trade
+	Canceled     []string
+	Activated    []string
+	Stored       bool
+	Quantity     string
+	Processed    string
+	Left         string
 }
 
 // Trade represents a single trade execution
 type Trade struct {
+	OrderID  string
+	Role     string
 	Price    string
 	Quantity string
+	IsQuote  bool
 }

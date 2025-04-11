@@ -9,10 +9,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	brokerList = "localhost:9092"
-	topic      = "test-msg-queue"
-	maxRetry   = 5
+var (
+	brokerList      = "localhost:9092"
+	topic           = "test-msg-queue"
+	newSyncProducer = sarama.NewSyncProducer
 )
 
 // QueueMessageSender implements the MessageSender interface
@@ -26,6 +26,12 @@ func (q *QueueMessageSender) SendDoneMessage(done *messaging.DoneMessage) error 
 		OrderId:           done.OrderID,
 		ExecutedQuantity:  done.ExecutedQty,
 		RemainingQuantity: done.RemainingQty,
+		Canceled:          done.Canceled,
+		Activated:         done.Activated,
+		Stored:            done.Stored,
+		Quantity:          done.Quantity,
+		Processed:         done.Processed,
+		Left:              done.Left,
 	}
 
 	// Convert trades to proto format
@@ -33,8 +39,11 @@ func (q *QueueMessageSender) SendDoneMessage(done *messaging.DoneMessage) error 
 		protoMsg.Trades = make([]*orderbookpb.Trade, 0, len(done.Trades))
 		for _, trade := range done.Trades {
 			protoMsg.Trades = append(protoMsg.Trades, &orderbookpb.Trade{
+				OrderId:  trade.OrderID,
+				Role:     trade.Role,
 				Price:    trade.Price,
 				Quantity: trade.Quantity,
+				IsQuote:  trade.IsQuote,
 			})
 		}
 	}
@@ -52,7 +61,7 @@ func (q *QueueMessageSender) SendDoneMessage(done *messaging.DoneMessage) error 
 	}
 
 	// Send the message to Kafka
-	producer, err := sarama.NewSyncProducer([]string{brokerList}, nil)
+	producer, err := newSyncProducer([]string{brokerList}, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create Kafka producer: %v", err)
 	}
@@ -64,4 +73,86 @@ func (q *QueueMessageSender) SendDoneMessage(done *messaging.DoneMessage) error 
 	}
 
 	return nil
+}
+
+// QueueMessageConsumer implements the MessageConsumer interface
+// for consuming messages from Kafka
+type QueueMessageConsumer struct {
+	consumer sarama.Consumer
+	done     chan struct{}
+}
+
+// NewQueueMessageConsumer creates a new Kafka consumer
+func NewQueueMessageConsumer() (*QueueMessageConsumer, error) {
+	consumer, err := sarama.NewConsumer([]string{brokerList}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kafka consumer: %v", err)
+	}
+
+	return &QueueMessageConsumer{
+		consumer: consumer,
+		done:     make(chan struct{}),
+	}, nil
+}
+
+// Close closes the Kafka consumer
+func (q *QueueMessageConsumer) Close() error {
+	close(q.done)
+	return q.consumer.Close()
+}
+
+// ConsumeDoneMessages starts consuming DoneMessages from Kafka
+func (q *QueueMessageConsumer) ConsumeDoneMessages(handler func(*messaging.DoneMessage) error) error {
+	partitionConsumer, err := q.consumer.ConsumePartition(topic, 0, sarama.OffsetNewest)
+	if err != nil {
+		return fmt.Errorf("failed to start consumer for partition: %v", err)
+	}
+	defer partitionConsumer.Close()
+
+	for {
+		select {
+		case msg := <-partitionConsumer.Messages():
+			// Deserialize the protobuf message
+			protoMsg := &orderbookpb.DoneMessage{}
+			if err := proto.Unmarshal(msg.Value, protoMsg); err != nil {
+				fmt.Printf("Failed to unmarshal message: %v\n", err)
+				continue
+			}
+
+			// Convert to DoneMessage
+			doneMsg := &messaging.DoneMessage{
+				OrderID:      protoMsg.OrderId,
+				ExecutedQty:  protoMsg.ExecutedQuantity,
+				RemainingQty: protoMsg.RemainingQuantity,
+				Canceled:     protoMsg.Canceled,
+				Activated:    protoMsg.Activated,
+				Stored:       protoMsg.Stored,
+				Quantity:     protoMsg.Quantity,
+				Processed:    protoMsg.Processed,
+				Left:         protoMsg.Left,
+			}
+
+			// Convert trades
+			if len(protoMsg.Trades) > 0 {
+				doneMsg.Trades = make([]messaging.Trade, 0, len(protoMsg.Trades))
+				for _, trade := range protoMsg.Trades {
+					doneMsg.Trades = append(doneMsg.Trades, messaging.Trade{
+						OrderID:  trade.OrderId,
+						Role:     trade.Role,
+						Price:    trade.Price,
+						Quantity: trade.Quantity,
+						IsQuote:  trade.IsQuote,
+					})
+				}
+			}
+
+			// Process the message
+			if err := handler(doneMsg); err != nil {
+				fmt.Printf("Failed to process message: %v\n", err)
+			}
+
+		case <-q.done:
+			return nil
+		}
+	}
 }
